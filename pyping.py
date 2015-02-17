@@ -68,7 +68,7 @@ class Icmp(object):
 
 class Pying(object):
     def __init__(self):
-        self.__name__ = "Pying"
+        self.__name__ = "PyPing"
         self.__version__ = 0.1
         self._socket = None
         self.cycles = None
@@ -84,25 +84,25 @@ class Pying(object):
         return datetime.datetime.now()
 
     def run(self):
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
-        self._socket.setblocking(0)
-        if isinstance(self.cycles, basestring):
-            self.cycles = int(self.cycles)
+        self._setup_socket()
+        # prepare and run our main loop
         first = True
         self.identity = os.getpid()
         while self.cycles is None or self._sequence < self.cycles:
+            # make and send our packet
             self._request_time = self._get_time()
             self._sequence += 1
             packet, size_header, size_data = Icmp.pack(self.identity,
                                                        Icmp.TYPE_ECHO_REQUEST,
                                                        "Ping Pong",
                                                        self._sequence)
+            # if we're just starting out, print the header row
             if first:
-                print "PING {0} ({1}) {2}({3}) bytes of data.".format(self.destination,
-                                                                      self.destination,
-                                                                      size_data,
-                                                                      size_header + size_data)
+                self._print_header(self.destination,
+                                   size_data,
+                                   size_header)
             self.send(packet)
+            # wait and receive our reply
             received = False
             try:
                 while not received:
@@ -115,37 +115,8 @@ class Pying(object):
             except:
                 raise
             first = False
-        if self._completed == 0:
-            packetloss = 100
-        else:
-            packetloss = 100 - (100 * (self._completed / self._sequence))
-        totaltime = sum(self._stats)
-        print "\n--- {0} ping statistics ---".format(self.destination)
-        print "{0} packets transmitted, {1} received, {2}% packet loss, time {3}ms".format(
-            self._sequence,
-            self._completed,
-            packetloss,
-            totaltime)
-        rtt = self._get_rtt_stats(self._stats)
-        print "rtt min/avg/max/mdev = {0}/{1}/{2}/{3} ms".format(rtt["min"],
-                                                                 rtt["avg"],
-                                                                 rtt["max"],
-                                                                 rtt["mdev"])
-
-    def _get_rtt_stats(self, stats):
-        rtt_min = round(min(stats), 3)
-        rtt_max = round(max(stats), 3)
-        rtt_avg = round(numpy.mean(stats), 3)
-        rtt_mdev = round(numpy.std(stats), 3)
-        return {
-            "min": rtt_min,
-            "avg": rtt_avg,
-            "max": rtt_max,
-            "mdev": rtt_mdev
-        }
-
-    def version_info(self):
-        return self.__name__ + " " + str(self.__version__)
+        # finally, print the summary
+        self._print_summary()
 
     def send(self, packet):
         destination = (socket.gethostbyname(self.destination), 0)
@@ -159,21 +130,71 @@ class Pying(object):
             bytes_received = len(data)
             ip = addr[0]
             icmp_type, icmp_code, csum, identity, sequence, data = Icmp.unpack(data)
-            # print icmp_type, icmp_code, csum, identity, sequence, data
             if icmp_type == Icmp.TYPE_ECHO_REPLY and identity == self.identity:
-                time_delta = self._get_time() - self._request_time
-                response_time = time_delta.total_seconds() * 1000
+                response_time = self._get_response_time()
                 self._stats.append(response_time)
-                print "{0} bytes from {1} ({2}): icmp_seq={3} ttl=64 time={4} ms".format(bytes_received,
-                                                                                         ip,
-                                                                                         ip,
-                                                                                         sequence,
-                                                                                         response_time)
+                self._print_row(bytes_received, ip, sequence, response_time)
                 return True
             else:
                 return False
         else:
             raise SocketTimeout()
+
+    def _setup_socket(self):
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+        self._socket.setblocking(0)
+
+    def _print_header(self, destination, size_data, size_header):
+        print "PING {0} ({1}) {2}({3}) bytes of data.".format(destination,
+                                                              destination,
+                                                              size_data,
+                                                              size_header + size_data)
+
+    def _print_row(self, bytes_received, ip, sequence, response_time):
+        print "{0} bytes from {1} ({2}): icmp_seq={3} ttl=64 time={4} ms".format(bytes_received,
+                                                                                 ip,
+                                                                                 ip,
+                                                                                 sequence,
+                                                                                 response_time)
+    def _print_summary(self):
+        packet_loss = self._get_packet_loss()
+        total_time = sum(self._stats)
+        print "\n--- {0} ping statistics ---".format(self.destination)
+        print "{0} packets transmitted, {1} received, {2}% packet loss, time {3}ms".format(
+            self._sequence,
+            self._completed,
+            packet_loss,
+            total_time)
+        rtt = self._get_rtt_stats(self._stats)
+        print "rtt min/avg/max/mdev = {0}/{1}/{2}/{3} ms".format(rtt["min"],
+                                                                 rtt["avg"],
+                                                                 rtt["max"],
+                                                                 rtt["mdev"])
+
+    def _get_packet_loss(self):
+        if self._completed == 0:
+            return 100
+        else:
+            return 100 - (100 * (self._completed / self._sequence))
+
+    def _get_rtt_stats(self, stats):
+        rtt_min = round(min(stats), 3)
+        rtt_max = round(max(stats), 3)
+        rtt_avg = round(numpy.mean(stats), 3)
+        rtt_mdev = round(numpy.std(stats), 3)
+        return {
+            "min": rtt_min,
+            "avg": rtt_avg,
+            "max": rtt_max,
+            "mdev": rtt_mdev
+        }
+
+    def _get_response_time(self):
+        time_delta = self._get_time() - self._request_time
+        return time_delta.total_seconds() * 1000
+
+    def version_info(self):
+        return self.__name__ + " " + str(self.__version__)
 
 
 if __name__ == '__main__':
@@ -184,7 +205,7 @@ if __name__ == '__main__':
     else:
         pying.destination = args["<destination>"]
         try:
-            pying.cycles = args["-c"]
+            pying.cycles = int(args["-c"])
         except:
             pass  # cycles not set, leave as default
         try:
